@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sonic Talk</title>
+</head>
+<body>
+<h1>Sonic Talk</h1>
+<p id="meta"></p>
+<details>
+  <summary>設定</summary>
+  <p>
+      <label>声 (voiceId)
+        <input id="voice" list="voices" value="tiffany">
+        <datalist id="voices">
+          <option value="tiffany"><option value="matthew"><option value="amy"><option value="olivia">
+          <option value="kiara"><option value="arjun"><option value="ambre"><option value="florian">
+          <option value="beatrice"><option value="lorenzo"><option value="tina"><option value="lennart">
+          <option value="lupe"><option value="carlos"><option value="carolina"><option value="leo">
+        </datalist>
+      </label>
+  </p>
+  <p><label>システムプロンプト<br><textarea id="prompt" rows="5" cols="60"></textarea></label></p>
+  <p>変更は次に「話す」を押したときに反映されます</p>
+</details>
+<p>
+  <button id="talk">話す</button>
+  <span id="state">待機中</span>
+</p>
+<pre id="meter"></pre>
+<p><input id="text" size="60" placeholder="テキストでも話しかけられます (Enter)" disabled></p>
+<div id="log"></div>
+<script>
+const $ = id => document.getElementById(id);
+const IN_RATE = 16000, OUT_RATE = 24000;
+
+fetch("/config").then(r => r.json()).then(c => {
+  $("meta").textContent = `${c.model} / ${c.region}`;
+  $("prompt").value = c.prompt;
+});
+
+// --- transcript -------------------------------------------------------------
+let last = null;
+function say(role, text, cls = "") {
+  if (last && last.role === role && role !== "SYSTEM") {
+    last.body.textContent += text;
+  } else {
+    const el = document.createElement("p");
+    el.innerHTML = `<b></b> <span></span>`;
+    el.querySelector("b").textContent = { USER: "あなた:", ASSISTANT: "Sonic:", SYSTEM: cls ? "エラー:" : "·" }[role];
+    el.querySelector("span").textContent = text;
+    $("log").append(el);
+    last = { role, body: el.querySelector("span") };
+  }
+}
+
+// --- playback ---------------------------------------------------------------
+let outCtx, outGain, playHead = 0, sources = new Set();
+function initOut() {
+  outCtx = new AudioContext({ sampleRate: OUT_RATE });
+  outGain = outCtx.createGain(); outGain.connect(outCtx.destination);
+}
+function play(b64) {
+  const bin = atob(b64), n = bin.length >> 1, f = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    let v = bin.charCodeAt(2 * i) | (bin.charCodeAt(2 * i + 1) << 8);
+    f[i] = (v >= 0x8000 ? v - 0x10000 : v) / 0x8000;
+  }
+  const buf = outCtx.createBuffer(1, n, OUT_RATE); buf.copyToChannel(f, 0);
+  const src = outCtx.createBufferSource(); src.buffer = buf; src.connect(outGain);
+  playHead = Math.max(playHead, outCtx.currentTime + 0.03);
+  src.start(playHead); playHead += buf.duration;
+  sources.add(src); src.onended = () => sources.delete(src);
+}
+function hush() {
+  for (const s of sources) { try { s.stop(); } catch {} }
+  sources.clear(); playHead = 0;
+}
+
+// --- capture ----------------------------------------------------------------
+const WORKLET = `
+class Tap extends AudioWorkletProcessor {
+  constructor() { super(); this.buf = new Int16Array(1024); this.n = 0; }
+  process([input]) {
+    const ch = input[0]; if (!ch) return true;
+    for (let i = 0; i < ch.length; i++) {
+      const s = Math.max(-1, Math.min(1, ch[i]));
+      this.buf[this.n++] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      if (this.n === this.buf.length) { this.port.postMessage(this.buf.slice().buffer, []); this.n = 0; }
+    }
+    return true;
+  }
+}
+registerProcessor("tap", Tap);`;
+
+let inCtx, inAnalyser, stream, ws;
+function b64(buf) {
+  const u = new Uint8Array(buf); let s = "";
+  for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode(...u.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+async function start() {
+  $("state").textContent = "接続中…";
+  stream = await navigator.mediaDevices.getUserMedia({
+    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+  });
+  inCtx = new AudioContext({ sampleRate: IN_RATE });
+  await inCtx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: "text/javascript" })));
+  const mic = inCtx.createMediaStreamSource(stream);
+  const tap = new AudioWorkletNode(inCtx, "tap");
+  inAnalyser = inCtx.createAnalyser(); inAnalyser.fftSize = 1024;
+  mic.connect(inAnalyser); mic.connect(tap);
+  if (!outCtx) initOut(); await outCtx.resume();
+
+  const q = new URLSearchParams({ voice: $("voice").value.trim(), prompt: $("prompt").value });
+  ws = new WebSocket(`ws://${location.host}/ws?${q}`);
+  ws.onmessage = e => {
+    const m = JSON.parse(e.data);
+    switch (m.t) {
+      case "ready":
+        $("state").textContent = "聞いています"; $("text").disabled = false;
+        tap.port.onmessage = ev => ws.readyState === 1 && ws.send(JSON.stringify({ t: "audio", d: b64(ev.data) }));
+        break;
+      case "audio": play(m.d); break;
+      case "text": say(m.role, m.text); break;
+      case "interrupt": hush(); say("SYSTEM", "（割り込み）"); break;
+      case "turn_end": last = null; break;
+      case "error": say("SYSTEM", m.message, "err"); break;
+    }
+  };
+  ws.onclose = () => stop(true);
+  $("talk").textContent = "終える";
+}
+
+function stop(fromSocket = false) {
+  if (!fromSocket && ws) ws.close();
+  ws = null;
+  stream?.getTracks().forEach(t => t.stop()); stream = null;
+  inCtx?.close(); inCtx = null; inAnalyser = null;
+  hush(); last = null;
+  $("text").disabled = true;
+  $("talk").textContent = "話す";
+  $("state").textContent = "待機中";
+}
+
+$("talk").onclick = () => (ws ? stop() : start().catch(e => { say("SYSTEM", String(e), "err"); stop(); }));
+$("text").onkeydown = e => {
+  if (e.key !== "Enter" || e.isComposing || !e.target.value.trim() || !ws) return;
+  say("USER", e.target.value); last = null;
+  ws.send(JSON.stringify({ t: "text", text: e.target.value }));
+  e.target.value = "";
+};
+
+
+// --- mic meter --------------------------------------------------------------
+const CELLS = 32, FLOOR_DB = -60;
+let peak = 0, peakAge = 0;
+function meter() {
+  let cells = 0, db = -Infinity;
+  if (inAnalyser) {
+    const d = new Float32Array(inAnalyser.fftSize); inAnalyser.getFloatTimeDomainData(d);
+    let sum = 0; for (const v of d) sum += v * v;
+    db = 10 * Math.log10(sum / d.length || 1e-12);
+    cells = Math.round(Math.max(0, Math.min(1, 1 - db / FLOOR_DB)) * CELLS);
+  }
+  if (cells >= peak) { peak = cells; peakAge = 0; } else if (++peakAge > 45) peak = Math.max(cells, peak - 1);
+  const bar = Array.from({ length: CELLS }, (_, i) => i < cells ? "#" : i === peak - 1 ? "|" : ".").join("");
+  const label = isFinite(db) ? `${db.toFixed(0).padStart(4)} dB` : "  -- dB";
+  $("meter").textContent = `MIC [${bar}] ${label}`;
+  requestAnimationFrame(meter);
+}
+meter();
+</script>
+</body>
+</html>
