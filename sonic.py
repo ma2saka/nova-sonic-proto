@@ -64,9 +64,11 @@ class Event:
 class SonicSession:
     """One prompt on one bidirectional stream. Use `async with`."""
 
-    def __init__(self, system_prompt: str, voice: str = "tiffany"):
+    def __init__(self, system_prompt: str, voice: str = "tiffany", tools: list[dict] | None = None):
+        """`tools` are Bedrock toolSpec dicts; answer each `toolUse` event with `tool_result`."""
         self.system_prompt = system_prompt
         self.voice = voice
+        self.tools = tools or []
         self.prompt = str(uuid.uuid4())
         self.audio_content: str | None = None
 
@@ -87,6 +89,8 @@ class SonicSession:
                 "mediaType": "audio/lpcm", "sampleRateHertz": OUTPUT_RATE, "sampleSizeBits": 16,
                 "channelCount": 1, "voiceId": self.voice, "encoding": "base64", "audioType": "SPEECH",
             },
+            "toolUseOutputConfiguration": {"mediaType": "application/json"},
+            "toolConfiguration": {"tools": [{"toolSpec": t} for t in self.tools]},
         }})
         await self.text(self.system_prompt, role="SYSTEM")
         return self
@@ -114,6 +118,17 @@ class SonicSession:
             "role": role, "textInputConfiguration": {"mediaType": "text/plain"},
         }})
         await self.send({"textInput": {"promptName": self.prompt, "contentName": name, "content": content}})
+        await self.send({"contentEnd": {"promptName": self.prompt, "contentName": name}})
+
+    async def tool_result(self, tool_use_id: str, result: dict):
+        name = str(uuid.uuid4())
+        await self.send({"contentStart": {
+            "promptName": self.prompt, "contentName": name, "type": "TOOL", "interactive": False,
+            "role": "TOOL", "toolResultInputConfiguration": {
+                "toolUseId": tool_use_id, "type": "TEXT", "textInputConfiguration": {"mediaType": "text/plain"},
+            },
+        }})
+        await self.send({"toolResult": {"promptName": self.prompt, "contentName": name, "content": json.dumps(result, ensure_ascii=False)}})
         await self.send({"contentEnd": {"promptName": self.prompt, "contentName": name}})
 
     async def audio(self, b64_pcm16: str):

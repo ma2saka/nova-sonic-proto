@@ -38,7 +38,8 @@ AWS_PROFILE=<your-profile> uv run probe.py "こんにちは" out.wav
 ## ファイル
 
 - `sonic.py`: Bedrock 双方向ストリームのセッション（`SonicSession`）
-- `server.py`: ブラウザと Sonic の間の WebSocket 中継
+- `server.py`: ブラウザと Sonic の間の WebSocket 中継。ツール呼び出しもここで処理する
+- `tools.py`: Sonic に渡すツール（現在の日時を返す `getCurrentDateTime`）
 - `index.html`: マイク入力（16kHz PCM16）の送信、返答音声（24kHz PCM16）の再生、文字起こし表示
 - `probe.py`: テキスト 1 ターンの動作確認
 
@@ -48,6 +49,7 @@ AWS_PROFILE=<your-profile> uv run probe.py "こんにちは" out.wav
 - テキストだけで話しかける場合も、音声入力の content を開いて音声（無音でよい）を流し続ける必要があります。ブラウザ版はマイク音声を常に流しています。
 - `aws-sdk-bedrock-runtime` は 0.9.0 に固定しています。0.10 以降は Config の作り方とトランスポートの指定が変わっています。
 - SDK はイベントに署名するたびに認証情報リゾルバを呼びます。呼ばれるたびに `boto3.Session()` を作ると `ValidationException: Invalid input request` になりました。`sonic.py` では認証情報オブジェクトをモジュールレベルでキャッシュしています。
+- ツールは `promptStart` の `toolConfiguration` で渡します。モデルが `toolUse` イベントを出したら、`TOOL` ロールの content で `toolResult` を返します（`SonicSession.tool_result`）。ツールを足すときは `tools.py` の `TOOLS` に `Tool` を追加します。
 - 1 回の接続は 8 分までです。このサンプルは再接続に対応していないので、切れたら「話す」を押し直してください。
 
 ## ライセンス

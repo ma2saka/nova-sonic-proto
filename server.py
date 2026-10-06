@@ -10,6 +10,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
 from sonic import MODEL_ID, REGION, Event, SonicSession
+from tools import TOOLS
 
 DEFAULT_PROMPT = (
     "あなたは落ち着いた話し相手です。ユーザーと音声で自然に会話します。"
@@ -50,8 +51,6 @@ def to_client(ev: Event, stages: dict[str, str]) -> dict | None:
             return {"t": "text", "role": role, "text": text}
         case "contentEnd" if ev.body.get("type") == "AUDIO" and ev.body.get("stopReason") == "END_TURN":
             return {"t": "turn_end"}
-        case "toolUse":
-            return {"t": "text", "role": "SYSTEM", "text": f"toolUse: {ev.body.get('toolName')}"}
         case _:
             return None
 
@@ -63,7 +62,7 @@ async def ws(sock: WebSocket):
     prompt = params.get("prompt") or DEFAULT_PROMPT
     voice = params.get("voice") or "tiffany"
     try:
-        async with SonicSession(prompt, voice=voice) as s:
+        async with SonicSession(prompt, voice=voice, tools=[t.spec() for t in TOOLS.values()]) as s:
             await sock.send_json({"t": "ready"})
 
             async def upstream():
@@ -78,6 +77,12 @@ async def ws(sock: WebSocket):
             async def downstream():
                 stages: dict[str, str] = {}
                 async for ev in s.events():
+                    if ev.kind == "toolUse":
+                        name = ev.body["toolName"]
+                        result = TOOLS[name].run(json.loads(ev.body.get("content") or "{}"))
+                        await s.tool_result(ev.body["toolUseId"], result)
+                        await sock.send_json({"t": "text", "role": "SYSTEM", "text": f"{name} → {json.dumps(result, ensure_ascii=False)}"})
+                        continue
                     out = to_client(ev, stages)
                     if out:
                         await sock.send_json(out)
