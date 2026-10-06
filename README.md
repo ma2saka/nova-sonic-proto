@@ -50,6 +50,7 @@ AWS_PROFILE=<your-profile> uv run probe.py "こんにちは" out.wav
 - `aws-sdk-bedrock-runtime` は 0.9.0 に固定しています。0.10 以降は Config の作り方とトランスポートの指定が変わっています。
 - SDK はイベントに署名するたびに認証情報リゾルバを呼びます。呼ばれるたびに `boto3.Session()` を作ると `ValidationException: Invalid input request` になりました。`sonic.py` では認証情報オブジェクトをモジュールレベルでキャッシュしています。
 - ツールは `promptStart` の `toolConfiguration` で渡します。モデルが `toolUse` イベントを出したら、`TOOL` ロールの content で `toolResult` を返します（`SonicSession.tool_result`）。ツールを足すときは `tools.py` の `TOOLS` に `Tool` を追加します。
+- 話者分離はできません。ユーザー側の文字起こしイベントには役割（`USER`）、本文、確定段階、言語ラベル（`[日本語]` など）が含まれ、話者を区別する項目はありません。複数人が話しても、すべて一人の `USER` の発言として扱われます。
 - 1 回の接続は 8 分までです。このサンプルは再接続に対応していないので、切れたら「話す」を押し直してください。
 
 ## ライセンス
