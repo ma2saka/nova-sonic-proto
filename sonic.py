@@ -71,6 +71,7 @@ class SonicSession:
         self.audio_content: str | None = None
 
     async def __aenter__(self):
+        _boto3_credentials()
         self.client = make_client()
         self.stream = await self.client.invoke_model_with_bidirectional_stream(
             InvokeModelWithBidirectionalStreamOperationInput(model_id=MODEL_ID)
