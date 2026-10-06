@@ -2,6 +2,7 @@
 name = "nova-sonic-proto"
 version = "0.1.0"
 description = "Sample: voice chat with Amazon Nova 2.5 Sonic in the browser"
+license = "MIT"
 requires-python = ">=3.13"
 dependencies = [
     "aws-sdk-bedrock-runtime==0.9.0",

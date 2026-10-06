@@ -49,3 +49,7 @@ AWS_PROFILE=<your-profile> uv run probe.py "こんにちは" out.wav
 - `aws-sdk-bedrock-runtime` は 0.9.0 に固定しています。0.10 以降は Config の作り方とトランスポートの指定が変わっています。
 - SDK はイベントに署名するたびに認証情報リゾルバを呼びます。呼ばれるたびに `boto3.Session()` を作ると `ValidationException: Invalid input request` になりました。`sonic.py` では認証情報オブジェクトをモジュールレベルでキャッシュしています。
 - 1 回の接続は 8 分までです。このサンプルは再接続に対応していないので、切れたら「話す」を押し直してください。
+
+## ライセンス
+
+MIT
